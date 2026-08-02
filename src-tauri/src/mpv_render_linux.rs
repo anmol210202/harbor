@@ -223,10 +223,6 @@ pub fn configure_linux_graphics() {
         eprintln!("[harbor::mpv_linux] HARBOR_LINUX_LEGACY_GFX=1: disabling WebKit accelerated compositing (legacy behaviour)");
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
     }
-    if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-        eprintln!("[harbor::mpv_linux] setting WEBKIT_DISABLE_DMABUF_RENDERER=1 so WebKitGTK overlays repaint over the mpv render surface");
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
     if !std::path::Path::new("/proc/driver/nvidia/version").exists() {
         return;
     }
