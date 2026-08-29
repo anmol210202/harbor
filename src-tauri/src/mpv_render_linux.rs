@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use std::cell::RefCell;
-use std::ffi::{c_void, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -11,8 +11,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::glib::translate::{Stash, ToGlibPtr};
 use gtk::prelude::*;
-use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
-use libmpv2_sys::mpv_handle;
+use libmpv2_sys::{mpv_handle, mpv_render_context};
 
 const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
 const GL_FRAMEBUFFER: u32 = 0x8D40;
@@ -43,6 +42,79 @@ enum Backend {
 #[derive(Copy, Clone)]
 struct MpvHandlePtr(NonNull<mpv_handle>);
 unsafe impl Send for MpvHandlePtr {}
+
+struct ProcLookup {
+    backend: Backend,
+}
+
+struct UpdateCallback {
+    callback: Box<dyn Fn() + Send + 'static>,
+}
+
+struct LinuxRenderContext {
+    ctx: *mut mpv_render_context,
+    proc_ctx: *mut c_void,
+    update_cb: *mut c_void,
+}
+
+unsafe impl Send for LinuxRenderContext {}
+
+impl Drop for LinuxRenderContext {
+    fn drop(&mut self) {
+        if !self.ctx.is_null() {
+            unsafe { libmpv2_sys::mpv_render_context_free(self.ctx) };
+            self.ctx = std::ptr::null_mut();
+        }
+        if !self.update_cb.is_null() {
+            unsafe {
+                let callback: *mut UpdateCallback = self.update_cb as *mut UpdateCallback;
+                drop(Box::from_raw(callback));
+            }
+            self.update_cb = std::ptr::null_mut();
+        }
+        if !self.proc_ctx.is_null() {
+            unsafe {
+                let proc_ctx: *mut ProcLookup = self.proc_ctx as *mut ProcLookup;
+                drop(Box::from_raw(proc_ctx));
+            }
+            self.proc_ctx = std::ptr::null_mut();
+        }
+    }
+}
+
+impl LinuxRenderContext {
+    fn render_to_fbo(&self, fbo: i32, width: i32, height: i32) -> Result<(), String> {
+        let target = libmpv2_sys::mpv_opengl_fbo {
+            fbo,
+            w: width,
+            h: height,
+            internal_format: 0,
+        };
+        let flip_y: c_int = 1;
+        let params = [
+            libmpv2_sys::mpv_render_param {
+                type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_OPENGL_FBO,
+                data: &target as *const _ as *mut c_void,
+            },
+            libmpv2_sys::mpv_render_param {
+                type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_FLIP_Y,
+                data: &flip_y as *const _ as *mut c_void,
+            },
+            libmpv2_sys::mpv_render_param {
+                type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_INVALID,
+                data: std::ptr::null_mut(),
+            },
+        ];
+        let err = unsafe {
+            libmpv2_sys::mpv_render_context_render(self.ctx, params.as_ptr() as *mut _)
+        };
+        if err == 0 {
+            Ok(())
+        } else {
+            Err(format!("mpv_render_context_render failed: {}", err))
+        }
+    }
+}
 
 struct Pending {
     mpv: MpvHandlePtr,
@@ -77,38 +149,58 @@ fn symbol_as_loader(name: &[u8]) -> Option<GlProcLoader> {
     (!sym.is_null()).then(|| unsafe { std::mem::transmute(sym) })
 }
 
-fn proc_loader() -> Option<unsafe extern "C" fn(*const c_char) -> *mut c_void> {
+fn proc_loader_for(backend: Backend) -> Option<GlProcLoader> {
     if let Some(epoxy) = symbol_as_loader(b"epoxy_get_proc_address\0") {
         return Some(epoxy);
     }
-    let primary = if PROC_WAYLAND.load(Ordering::Relaxed) {
-        b"eglGetProcAddress\0".as_ptr()
+    let primary: &[u8] = if backend == Backend::Wayland {
+        b"eglGetProcAddress\0"
     } else {
-        b"glXGetProcAddressARB\0".as_ptr()
+        b"glXGetProcAddressARB\0"
     };
-    let sym = unsafe { dlsym(RTLD_DEFAULT, primary as *const c_char) };
+    let sym = unsafe { dlsym(RTLD_DEFAULT, primary.as_ptr() as *const c_char) };
     if !sym.is_null() {
         return Some(unsafe { std::mem::transmute(sym) });
     }
-    let egl = unsafe { dlsym(RTLD_DEFAULT, b"eglGetProcAddress\0".as_ptr() as *const c_char) };
-    if egl.is_null() {
-        return None;
+    let fallback = b"eglGetProcAddress\0";
+    let sym = unsafe { dlsym(RTLD_DEFAULT, fallback.as_ptr() as *const c_char) };
+    if !sym.is_null() {
+        return Some(unsafe { std::mem::transmute(sym) });
     }
-    Some(unsafe { std::mem::transmute(egl) })
+    let glx = unsafe { dlsym(RTLD_DEFAULT, b"glXGetProcAddressARB\0".as_ptr() as *const c_char) };
+    (!glx.is_null()).then(|| unsafe { std::mem::transmute(glx) })
 }
 
-fn get_proc_address(_ctx: &(), name: &str) -> *mut c_void {
+fn proc_loader() -> Option<GlProcLoader> {
+    let backend = if PROC_WAYLAND.load(Ordering::Relaxed) {
+        Backend::Wayland
+    } else {
+        Backend::X11
+    };
+    proc_loader_for(backend)
+}
+
+fn lookup_gl_proc(backend: Backend, name: &str) -> *mut c_void {
     let cstr = match CString::new(name) {
         Ok(s) => s,
         Err(_) => return std::ptr::null_mut(),
     };
-    if let Some(f) = proc_loader() {
-        let p = unsafe { f(cstr.as_ptr()) };
-        if !p.is_null() {
-            return p;
+    if let Some(loader) = proc_loader_for(backend) {
+        let ptr = unsafe { loader(cstr.as_ptr()) };
+        if !ptr.is_null() {
+            return ptr;
         }
     }
     unsafe { dlsym(RTLD_DEFAULT, cstr.as_ptr()) }
+}
+
+fn get_proc_address(_ctx: &(), name: &str) -> *mut c_void {
+    let backend = if PROC_WAYLAND.load(Ordering::Relaxed) {
+        Backend::Wayland
+    } else {
+        Backend::X11
+    };
+    lookup_gl_proc(backend, name)
 }
 
 fn resolve_gl<T>(name: &[u8]) -> Option<T> {
@@ -295,7 +387,7 @@ pub fn install(gtk_window: &gtk::ApplicationWindow, vbox: &gtk::Box) -> Result<(
     }
     overlay.show_all();
 
-    let render_cell: Rc<RefCell<Option<RenderContext>>> = Rc::new(RefCell::new(None));
+    let render_cell: Rc<RefCell<Option<LinuxRenderContext>>> = Rc::new(RefCell::new(None));
     let mpv = pending.mpv;
     let backend = pending.backend;
     let display_native = pending.display_native;
@@ -314,8 +406,7 @@ pub fn install(gtk_window: &gtk::ApplicationWindow, vbox: &gtk::Box) -> Result<(
         let mut slot = render_cell.borrow_mut();
         if slot.is_none() {
             match build_render_context(mpv, backend, display_native) {
-                Ok(mut rc) => {
-                    rc.set_update_callback(|| schedule_redraw());
+                Ok(rc) => {
                     *slot = Some(rc);
                 }
                 Err(e) => {
@@ -349,27 +440,88 @@ fn build_render_context(
     mpv: MpvHandlePtr,
     backend: Backend,
     display_native: u64,
-) -> Result<RenderContext, String> {
-    let init_params = OpenGLInitParams::<()> {
-        get_proc_address,
-        ctx: (),
+) -> Result<LinuxRenderContext, String> {
+    let proc_ctx = Box::into_raw(Box::new(ProcLookup { backend }));
+    let init_params = libmpv2_sys::mpv_opengl_init_params {
+        get_proc_address: Some(gl_proc_address),
+        get_proc_address_ctx: proc_ctx as *mut c_void,
     };
-    let mut params: Vec<RenderParam<()>> = vec![
-        RenderParam::ApiType(RenderParamApiType::OpenGl),
-        RenderParam::InitParams(init_params),
+    let init_box = Box::into_raw(Box::new(init_params));
+
+    let mut params: Vec<libmpv2_sys::mpv_render_param> = vec![
+        libmpv2_sys::mpv_render_param {
+            type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_API_TYPE,
+            data: libmpv2_sys::MPV_RENDER_API_TYPE_OPENGL.as_ptr() as *mut c_void,
+        },
+        libmpv2_sys::mpv_render_param {
+            type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+            data: init_box as *mut c_void,
+        },
     ];
     if display_native != 0 {
         let ptr = display_native as *const c_void;
         match backend {
-            Backend::X11 => params.push(RenderParam::X11Display(ptr)),
-            Backend::Wayland => params.push(RenderParam::WaylandDisplay(ptr)),
+            Backend::X11 => params.push(libmpv2_sys::mpv_render_param {
+                type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_X11_DISPLAY,
+                data: ptr as *mut c_void,
+            }),
+            Backend::Wayland => params.push(libmpv2_sys::mpv_render_param {
+                type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_WL_DISPLAY,
+                data: ptr as *mut c_void,
+            }),
         }
     }
-    let mpv_ref: &mut mpv_handle = unsafe { &mut *mpv.0.as_ptr() };
-    RenderContext::new(mpv_ref, params).map_err(|e| format!("render init: {:?}", e))
+    params.push(libmpv2_sys::mpv_render_param {
+        type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_INVALID,
+        data: std::ptr::null_mut(),
+    });
+
+    let context_ptr = Box::into_raw(Box::new(std::ptr::null_mut() as *mut mpv_render_context));
+    let raw_params = Box::into_raw(params.into_boxed_slice()) as *mut libmpv2_sys::mpv_render_param;
+    let err = unsafe {
+        libmpv2_sys::mpv_render_context_create(context_ptr, mpv.0.as_ptr(), raw_params)
+    };
+    drop(unsafe { Box::from_raw(raw_params) });
+    drop(unsafe { Box::from_raw(init_box) });
+    let ctx = unsafe { *Box::from_raw(context_ptr) };
+    if err != 0 {
+        unsafe { drop(Box::from_raw(proc_ctx)); }
+        return Err(format!("render init failed: {}", err));
+    }
+
+    let callback_box = Box::into_raw(Box::new(UpdateCallback {
+        callback: Box::new(|| schedule_redraw()),
+    }));
+    unsafe {
+        libmpv2_sys::mpv_render_context_set_update_callback(
+            ctx,
+            Some(render_update_callback),
+            callback_box as *mut c_void,
+        );
+    }
+
+    Ok(LinuxRenderContext {
+        ctx,
+        proc_ctx: proc_ctx as *mut c_void,
+        update_cb: callback_box as *mut c_void,
+    })
 }
 
-fn do_render(rc: &RenderContext, area: &gtk::GLArea) {
+unsafe extern "C" fn gl_proc_address(
+    _ctx: *mut c_void,
+    name: *const c_char,
+) -> *mut c_void {
+    let lookup = unsafe { &*( _ctx as *const ProcLookup ) };
+    let requested = unsafe { CStr::from_ptr(name) };
+    lookup_gl_proc(lookup.backend, requested.to_str().unwrap_or_default())
+}
+
+unsafe extern "C" fn render_update_callback(ctx: *mut c_void) {
+    let callback = unsafe { &*(ctx as *const UpdateCallback) };
+    (callback.callback)();
+}
+
+fn do_render(rc: &LinuxRenderContext, area: &gtk::GLArea) {
     area.attach_buffers();
     let fbo = current_fbo();
 
@@ -400,7 +552,9 @@ fn do_render(rc: &RenderContext, area: &gtk::GLArea) {
     if fbo == 0 && !FBO_ZERO_WARNED.swap(true, Ordering::Relaxed) {
         eprintln!("[harbor::mpv_linux] WARNING: GtkGLArea FBO query returned 0; mpv will render to the default framebuffer and the video region will stay BLACK. glGetIntegerv or the GL proc loader likely failed to resolve.");
     }
-    let _ = rc.render::<()>(fbo, w, h, true);
+    if let Err(err) = rc.render_to_fbo(fbo, w, h) {
+        eprintln!("[harbor::mpv_linux] render failed: {}", err);
+    }
     restore_gdk_gl_state(w, h);
 }
 

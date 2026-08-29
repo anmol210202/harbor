@@ -341,6 +341,8 @@ fn apply_pre_init(
         set("hwdec", "videotoolbox-copy");
         set("force-window", "no");
     } else if cfg!(target_os = "linux") {
+        set("vo", "libmpv");
+        set("gpu-context", "wayland,x11egl,x11");
         set("hwdec", "auto-safe");
         if args.embed.unwrap_or(false) {
             set("force-window", "no");
