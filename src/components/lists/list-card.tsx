@@ -48,6 +48,9 @@ export function ListCard({
         <h3 className="line-clamp-1 font-display text-[16px] font-medium leading-tight text-ink">
           {list.name}
         </h3>
+        {list.description && (
+          <p className="line-clamp-2 text-[12px] leading-snug text-ink-muted">{list.description}</p>
+        )}
         <p className="text-[12px] text-ink-subtle">
           {count === 1 ? t("1 item") : t("{n} items", { n: count })}
           {list.updatedAt > 0 &&

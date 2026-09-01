@@ -22,6 +22,7 @@ export type FeaturedItem = {
 export type FeaturedList = {
   id: string;
   name: string;
+  description?: string;
   items: FeaturedItem[];
   coverImage?: string;
   bgImage?: string;
@@ -33,6 +34,7 @@ export type FeaturedList = {
 export type PickableList = {
   id: string;
   name: string;
+  description?: string;
   items: FeaturedItem[];
   coverImage?: string;
   bgImage?: string;
@@ -43,6 +45,7 @@ export function toPickableList(list: CustomList): PickableList {
   return {
     id: list.id,
     name: list.name,
+    description: list.description,
     coverImage: list.coverImage,
     bgImage: list.bgImage,
     bgMode: list.bgMode,
@@ -63,6 +66,7 @@ export function toFeaturedList(list: PickableList): FeaturedList {
   return {
     id: "",
     name: list.name,
+    description: list.description,
     items: list.items,
     coverImage: list.coverImage,
     bgImage: list.bgImage,
@@ -79,18 +83,25 @@ export function buildFeaturedPayload(
   served: FeaturedList[],
 ): FeaturedList[] {
   const idByName = new Map<string, string>();
+  const byName = new Map<string, FeaturedList>();
   for (const f of served) {
     const key = normalizeListName(f.name);
     if (f.id && !idByName.has(key)) idByName.set(key, f.id);
+    if (!byName.has(key)) byName.set(key, f);
   }
-  return selected.map((l) => ({
-    id: idByName.get(normalizeListName(l.name)) ?? "",
-    name: l.name,
-    coverImage: l.coverImage,
-    bgImage: l.bgImage,
-    bgMode: l.bgMode,
-    items: l.items,
-  }));
+  return selected.map((l) => {
+    const key = normalizeListName(l.name);
+    const existing = byName.get(key);
+    return {
+      id: idByName.get(key) ?? "",
+      name: l.name,
+      description: l.description ?? existing?.description,
+      coverImage: l.coverImage,
+      bgImage: l.bgImage,
+      bgMode: l.bgMode,
+      items: l.items,
+    };
+  });
 }
 
 function authHeaders(): Record<string, string> {
@@ -98,9 +109,20 @@ function authHeaders(): Record<string, string> {
   return t ? { authorization: `Bearer ${t}` } : {};
 }
 
+export function hydrateFeaturedListDescriptions(lists: FeaturedList[]): FeaturedList[] {
+  const localByName = new Map(readLists().map((l) => [normalizeListName(l.name), l] as const));
+  return lists.map((list) => {
+    const local = localByName.get(normalizeListName(list.name));
+    return {
+      ...list,
+      description: list.description ?? local?.description,
+    };
+  });
+}
+
 function readFeatured(data: unknown): FeaturedList[] {
   const lists = (data as { featuredLists?: unknown } | null)?.featuredLists;
-  return Array.isArray(lists) ? (lists as FeaturedList[]) : [];
+  return Array.isArray(lists) ? hydrateFeaturedListDescriptions(lists as FeaturedList[]) : [];
 }
 
 export async function fetchFeaturedLists(
@@ -138,7 +160,8 @@ export async function saveFeaturedLists(
   });
   if (!res.ok) throw new Error(`save featured lists ${res.status}`);
   const echoed = readFeatured(await res.json());
-  return echoed.length || lists.length === 0 ? echoed : lists;
+  const merged = echoed.length ? hydrateFeaturedListDescriptions(echoed) : hydrateFeaturedListDescriptions(lists);
+  return merged.length || lists.length === 0 ? merged : lists;
 }
 
 export async function unfeatureListByName(name: string): Promise<void> {

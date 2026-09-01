@@ -193,6 +193,7 @@ function Skeleton({ shape }: { shape: RowShape }) {
 export function Row({
   title,
   titleExtra,
+  subTitle,
   className = "",
   min = 144,
   shape = "portrait",
@@ -210,6 +211,7 @@ export function Row({
 }: {
   title?: React.ReactNode;
   titleExtra?: React.ReactNode;
+  subTitle?: React.ReactNode;
   className?: string;
   min?: number;
   shape?: RowShape;
@@ -678,12 +680,15 @@ export function Row({
         <div className="flex items-baseline justify-between gap-4 pe-1">
           {title && (
             <div className="flex min-w-0 items-center gap-2">
-              <h3
-                className={`truncate font-medium tracking-tight ${titleClassName}`}
-                style={{ fontSize: `${Math.round(17 * settings.rowTitleScale * titleScale)}px` }}
-              >
-                {title}
-              </h3>
+              <div className="min-w-0">
+                <h3
+                  className={`truncate font-medium tracking-tight ${titleClassName}`}
+                  style={{ fontSize: `${Math.round(17 * settings.rowTitleScale * titleScale)}px` }}
+                >
+                  {title}
+                </h3>
+                {subTitle && <div className="mt-1 truncate">{subTitle}</div>}
+              </div>
               {titleExtra}
             </div>
           )}

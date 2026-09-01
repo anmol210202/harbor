@@ -1,6 +1,7 @@
 import { safeFetch } from "@/lib/safe-fetch";
 import { authToken, currentAuthor, refreshToken } from "@/lib/theme-auth";
 import { HARBOR_API_BASE } from "@/lib/config/endpoints";
+import { hydrateFeaturedListDescriptions } from "@/lib/social/featured-lists";
 import type {
   ActivityItem,
   Badge,
@@ -52,13 +53,21 @@ function sameHandle(mine: string | null | undefined, viewing: string): boolean {
 
 export async function fetchSummary(handle: string, signal?: AbortSignal) {
   const summary = await getJson<ProfileSummary>(`/u/${encodeURIComponent(handle)}`, signal);
-  if (summary.isOwner) return summary;
-  if (!authToken() || !sameHandle(currentAuthor()?.handle, handle)) return summary;
-  if (!(await refreshToken())) return summary;
+  const withDescriptions = {
+    ...summary,
+    featuredLists: summary.featuredLists ? hydrateFeaturedListDescriptions(summary.featuredLists) : summary.featuredLists,
+  };
+  if (summary.isOwner) return withDescriptions;
+  if (!authToken() || !sameHandle(currentAuthor()?.handle, handle)) return withDescriptions;
+  if (!(await refreshToken())) return withDescriptions;
   try {
-    return await getJson<ProfileSummary>(`/u/${encodeURIComponent(handle)}`, signal);
+    const refreshed = await getJson<ProfileSummary>(`/u/${encodeURIComponent(handle)}`, signal);
+    return {
+      ...refreshed,
+      featuredLists: refreshed.featuredLists ? hydrateFeaturedListDescriptions(refreshed.featuredLists) : refreshed.featuredLists,
+    };
   } catch {
-    return summary;
+    return withDescriptions;
   }
 }
 

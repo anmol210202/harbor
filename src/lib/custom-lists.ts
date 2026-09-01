@@ -56,6 +56,7 @@ export type ListBgMode = "auto" | "custom";
 export type CustomList = {
   id: string;
   name: string;
+  description?: string;
   createdAt: number;
   updatedAt: number;
   order?: number;
@@ -94,6 +95,12 @@ function toItem(input: ListItemInput): ListItem {
   };
 }
 
+function normalizeOptionalText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function read(): CustomList[] {
   if (memoryFallback) return memoryFallback.map((l) => ({ ...l, items: [...l.items] }));
   try {
@@ -127,6 +134,7 @@ function read(): CustomList[] {
       out.push({
         id: e.id,
         name: e.name,
+        description: normalizeOptionalText(e.description),
         createdAt: typeof e.createdAt === "number" ? e.createdAt : 0,
         updatedAt: typeof e.updatedAt === "number" ? e.updatedAt : 0,
         order: typeof e.order === "number" ? e.order : undefined,
@@ -205,27 +213,47 @@ export function subscribeLists(fn: () => void): () => void {
   };
 }
 
-export function createList(name: string): string | null {
+export function createList(name: string, description?: string): string | null {
   const trimmed = name.trim();
   if (!trimmed) return null;
   const lists = read();
   if (lists.length >= MAX_LISTS) return null;
   const id = randomUuid();
   const now = Date.now();
-  lists.push({ id, name: trimmed, createdAt: now, updatedAt: now, items: [] });
+  const safeDescription = normalizeOptionalText(description);
+  lists.push({
+    id,
+    name: trimmed,
+    description: safeDescription,
+    createdAt: now,
+    updatedAt: now,
+    items: [],
+  });
   write(lists);
   return id;
 }
 
-export function renameList(id: string, name: string): void {
-  const trimmed = name.trim();
-  if (!trimmed) return;
+export function updateListDetails(
+  id: string,
+  patch: { name?: string; description?: string | null },
+): void {
   const lists = read();
   const list = lists.find((l) => l.id === id);
   if (!list) return;
-  list.name = trimmed;
+  if (patch.name !== undefined) {
+    const trimmed = patch.name.trim();
+    if (!trimmed) return;
+    list.name = trimmed;
+  }
+  if (patch.description !== undefined) {
+    list.description = normalizeOptionalText(patch.description ?? undefined);
+  }
   list.updatedAt = Date.now();
   write(lists);
+}
+
+export function renameList(id: string, name: string): void {
+  updateListDetails(id, { name });
 }
 
 export function deleteList(id: string): void {

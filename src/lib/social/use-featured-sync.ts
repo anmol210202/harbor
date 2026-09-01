@@ -12,8 +12,8 @@ import {
 
 const MIGRATED_KEY = "harbor.featured.postermigrated.v1";
 
-function sig(items: FeaturedItem[]): string {
-  return items.map((i) => `${i.id}\u0000${i.name}`).join("|");
+function sig(items: FeaturedItem[], description?: string): string {
+  return `${description ?? ""}\u0000${items.map((i) => `${i.id}\u0000${i.name}`).join("|")}`;
 }
 
 export function useFeaturedListsSync(): void {
@@ -89,9 +89,9 @@ export function useFeaturedListsSync(): void {
       let changed = false;
       const next = current.map((f) => {
         const local = localByName.get(normalizeListName(f.name));
-        if (!local || sig(f.items) === sig(local.items)) return f;
+        if (!local || sig(f.items, f.description) === sig(local.items, local.description)) return f;
         changed = true;
-        return { ...f, items: local.items };
+        return { ...f, description: local.description ?? f.description, items: local.items };
       });
       if (!changed || !next.length) return;
       const saved = await saveFeaturedLists(next, true);

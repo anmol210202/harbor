@@ -121,7 +121,10 @@ function ListsSection({
       {shown.map((list, i) => (
         <div key={list.id || `${list.name}:${i}`}>
           <div className="mb-3 flex items-center gap-2">
-            <h3 className="font-display text-[18px] text-ink">{list.name || "Untitled list"}</h3>
+            <div className="min-w-0 flex-1">
+              <h3 className="font-display text-[18px] text-ink">{list.name || "Untitled list"}</h3>
+              {list.description && <p className="mt-1 text-[12px] leading-snug text-ink-muted">{list.description}</p>}
+            </div>
             <span className="text-[12px] tabular-nums text-ink-subtle">{list.items.length}</span>
             <div className="ml-auto flex items-center gap-2">
               <ListHeart

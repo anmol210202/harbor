@@ -1,7 +1,7 @@
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { deleteList, renameList, type CustomList } from "@/lib/custom-lists";
+import { deleteList, type CustomList, updateListDetails } from "@/lib/custom-lists";
 import { useT } from "@/lib/i18n";
 import { unfeatureListByName } from "@/lib/social/featured-lists";
 import { AnchoredMenu } from "@/components/anchored-menu";
@@ -57,10 +57,11 @@ export function ListSettingsMenu({
       {renaming && (
         <RenameModal
           initial={list.name}
+          initialDescription={list.description}
           onClose={() => setRenaming(false)}
-          onSubmit={(name) => {
-            renameList(list.id, name);
-            emitListToast(t("List renamed"));
+          onSubmit={(name, description) => {
+            updateListDetails(list.id, { name, description });
+            emitListToast(t("List saved"));
             setRenaming(false);
           }}
         />
@@ -109,15 +110,18 @@ function MenuItem({
 
 function RenameModal({
   initial,
+  initialDescription,
   onClose,
   onSubmit,
 }: {
   initial: string;
+  initialDescription?: string;
   onClose: () => void;
-  onSubmit: (name: string) => void;
+  onSubmit: (name: string, description?: string) => void;
 }) {
   const t = useT();
   const [name, setName] = useState(initial);
+  const [description, setDescription] = useState(initialDescription ?? "");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -129,7 +133,7 @@ function RenameModal({
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
-    onSubmit(trimmed);
+    onSubmit(trimmed, description.trim() || undefined);
   };
 
   return createPortal(
@@ -153,6 +157,19 @@ function RenameModal({
           spellCheck={false}
           className="h-11 w-full rounded-xl border border-edge bg-canvas px-3.5 text-[14px] text-ink outline-none transition-colors placeholder:text-ink-subtle focus:border-ink"
         />
+        <label className="flex flex-col gap-1.5 pt-1">
+          <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-subtle">
+            {t("Description")}
+          </span>
+          <textarea
+            value={description}
+            maxLength={240}
+            rows={3}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder={t("Optional notes about this list")}
+            className="w-full rounded-xl border border-edge bg-canvas px-3.5 py-2.5 text-[14px] text-ink outline-none transition-colors placeholder:text-ink-subtle focus:border-ink"
+          />
+        </label>
         <div className="flex items-center justify-end gap-2 pt-1">
           <button
             type="button"
