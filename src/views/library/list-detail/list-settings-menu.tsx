@@ -7,13 +7,7 @@ import { unfeatureListByName } from "@/lib/social/featured-lists";
 import { AnchoredMenu } from "@/components/anchored-menu";
 import { emitListToast } from "@/components/lists/list-toast";
 
-export function ListSettingsMenu({
-  list,
-  onDeleted,
-}: {
-  list: CustomList;
-  onDeleted: () => void;
-}) {
+export function ListSettingsMenu({ list, onDeleted }: { list: CustomList; onDeleted: () => void }) {
   const t = useT();
   const anchorRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);

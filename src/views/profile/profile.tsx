@@ -178,7 +178,9 @@ export function ProfileView({
   const c = resolveCustomization(summary);
   const featuredLists = summary.featuredLists?.map((featured) => {
     if (!summary.isOwner || featured.description) return featured;
-    const local = localLists.find((list) => list.name.trim().toLowerCase() === featured.name.trim().toLowerCase());
+    const local = localLists.find(
+      (list) => list.name.trim().toLowerCase() === featured.name.trim().toLowerCase(),
+    );
     return local?.description ? { ...featured, description: local.description } : featured;
   });
 

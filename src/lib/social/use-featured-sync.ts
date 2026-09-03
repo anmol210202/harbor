@@ -89,7 +89,8 @@ export function useFeaturedListsSync(): void {
       let changed = false;
       const next = current.map((f) => {
         const local = localByName.get(normalizeListName(f.name));
-        if (!local || (sig(f.items) === sig(local.items) && f.description === local.description)) return f;
+        if (!local || (sig(f.items) === sig(local.items) && f.description === local.description))
+          return f;
         changed = true;
         return { ...f, description: local.description, items: local.items };
       });
