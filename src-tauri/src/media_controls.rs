@@ -113,7 +113,7 @@ mod linux {
     use zbus::zvariant::{ObjectPath, Value};
     use zbus::{interface, connection::Connection};
 
-    #[derive(Default, Clone)]
+    #[derive(Clone)]
     pub struct PlaybackState {
         pub playing: bool,
         pub title: String,
@@ -121,6 +121,21 @@ mod linux {
         pub art_url: Option<String>,
         pub duration_us: i64,
         pub position_us: i64,
+        pub updated_at: std::time::Instant,
+    }
+
+    impl Default for PlaybackState {
+        fn default() -> Self {
+            Self {
+                playing: false,
+                title: String::new(),
+                subtitle: String::new(),
+                art_url: None,
+                duration_us: 0,
+                position_us: 0,
+                updated_at: std::time::Instant::now(),
+            }
+        }
     }
 
     pub struct MprisHandle {
@@ -218,11 +233,24 @@ mod linux {
         async fn seek(&self, offset_us: i64) {
             let offset_sec = offset_us as f64 / 1_000_000.0;
             let _ = self.app.emit("harbor://media-seek-relative", offset_sec);
+            let mut s = self.state.lock().await;
+            let current = if s.playing {
+                s.position_us + s.updated_at.elapsed().as_micros() as i64
+            } else {
+                s.position_us
+            };
+            let new_pos = (current + offset_us).max(0);
+            let new_pos = if s.duration_us > 0 { new_pos.min(s.duration_us) } else { new_pos };
+            s.position_us = new_pos;
+            s.updated_at = std::time::Instant::now();
         }
 
         async fn set_position(&self, _track_id: ObjectPath<'_>, position_us: i64) {
             let pos_sec = position_us as f64 / 1_000_000.0;
             let _ = self.app.emit("harbor://media-seek-absolute", pos_sec);
+            let mut s = self.state.lock().await;
+            s.position_us = position_us.max(0);
+            s.updated_at = std::time::Instant::now();
         }
 
         #[zbus(signal)]
@@ -282,7 +310,18 @@ mod linux {
 
         #[zbus(property)]
         async fn position(&self) -> i64 {
-            self.state.lock().await.position_us
+            let s = self.state.lock().await;
+            if s.playing {
+                let elapsed = s.updated_at.elapsed().as_micros() as i64;
+                let cur = s.position_us + elapsed;
+                if s.duration_us > 0 {
+                    cur.min(s.duration_us)
+                } else {
+                    cur
+                }
+            } else {
+                s.position_us
+            }
         }
 
         #[zbus(property)]
@@ -455,6 +494,7 @@ mod linux {
                 s.art_url = art_url;
                 s.duration_us = duration_us;
                 s.position_us = position_us;
+                s.updated_at = std::time::Instant::now();
             }
 
             if let Ok(iface) = conn.object_server().interface::<_, MprisPlayer>("/org/mpris/MediaPlayer2").await {
@@ -479,6 +519,7 @@ mod linux {
                 s.art_url = None;
                 s.duration_us = 0;
                 s.position_us = 0;
+                s.updated_at = std::time::Instant::now();
             }
 
             if let Ok(iface) = conn.object_server().interface::<_, MprisPlayer>("/org/mpris/MediaPlayer2").await {
