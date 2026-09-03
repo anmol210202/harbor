@@ -70,6 +70,7 @@ export function MyListsShowcase({
               key={list.id || `${list.name}:${i}`}
               title={list.name || t("Untitled list")}
               titleExtra={<span className="text-[12px] tabular-nums text-ink-subtle">{list.items.length}</span>}
+              headerDescription={list.description && <p className="max-w-2xl text-[13px] leading-relaxed text-ink-muted">{list.description}</p>}
               headerRight={
                 <div className="flex items-center gap-2.5">
                   <ListHeart

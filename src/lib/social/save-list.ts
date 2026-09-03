@@ -10,7 +10,7 @@ export async function saveList(handle: string, listId: string): Promise<SaveList
   const existing = readLists();
   if (nameLc && existing.some((l) => l.name.trim().toLowerCase() === nameLc)) return { ok: true, already: true };
   if (existing.length >= MAX_LISTS) return { ok: false, full: true };
-  const newId = createList(list.name || "Saved list");
+  const newId = createList(list.name || "Saved list", list.description);
   if (!newId) return { ok: false, full: true };
   for (const it of list.items) addToList(newId, { id: it.id, type: it.type, name: it.name, poster: it.poster });
   return { ok: true };

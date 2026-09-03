@@ -134,6 +134,7 @@ function ListsSection({
               <ListShareButton handle={handle ?? ""} listId={list.id} name={list.name} />
             </div>
           </div>
+          {list.description && <p className="mb-3 max-w-2xl text-[13px] leading-relaxed text-ink-muted">{list.description}</p>}
           <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-x-4 gap-y-5">
             {list.items.map((item) => (
               <button

@@ -38,6 +38,7 @@ export function SharedListHero({
         <h1 className="font-display text-[36px] leading-[1.04] text-ink sm:text-[46px]">
           {list.name || "Untitled list"}
         </h1>
+        {list.description && <p className="max-w-2xl text-[14px] leading-relaxed text-ink-muted">{list.description}</p>}
         <span className="text-[13px] tabular-nums text-ink-subtle">
           {count} {count === 1 ? "title" : "titles"}
         </span>

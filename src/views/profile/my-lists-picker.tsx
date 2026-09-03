@@ -66,6 +66,7 @@ function ListRow({
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[14px] font-medium text-ink">{list.name}</div>
+        {list.description && <div className="line-clamp-2 text-[12px] leading-snug text-ink-muted">{list.description}</div>}
         <div className="text-[12px] text-ink-subtle">
           {list.items.length} {list.items.length === 1 ? t("title") : t("titles")}
           {ghost && <span> · {t("not in your library")}</span>}
@@ -123,6 +124,7 @@ function SelectedRow({
       <span className="w-4 shrink-0 text-center text-[13px] font-semibold tabular-nums text-ink-subtle">{index + 1}</span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[14px] font-medium text-ink">{list.name}</div>
+        {list.description && <div className="line-clamp-2 text-[12px] leading-snug text-ink-muted">{list.description}</div>}
         <div className="text-[12px] text-ink-subtle">
           {list.items.length} {list.items.length === 1 ? t("title") : t("titles")}
           {ghost && <span> · {t("not in your library")}</span>}
@@ -160,7 +162,7 @@ export function MyListsPicker({ onClose }: { onClose?: () => void }) {
     const localNames = new Set(lists.map((l) => normName(l.name)));
     return served
       .filter((s) => !localNames.has(normName(s.name)))
-      .map((s) => ({ id: "srv:" + s.id, name: s.name, items: s.items }));
+      .map((s) => ({ id: "srv:" + s.id, name: s.name, description: s.description, items: s.items }));
   }, [lists, served]);
   const entries = useMemo(() => [...lists, ...ghosts], [lists, ghosts]);
   const ghostIds = useMemo(() => new Set(ghosts.map((g) => g.id)), [ghosts]);
