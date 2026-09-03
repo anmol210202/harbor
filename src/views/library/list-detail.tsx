@@ -60,7 +60,13 @@ export function ListDetail({ listId, onBack }: { listId: string; onBack: () => v
     if (els.some((el) => !el)) return;
     const slots = els.map((el) => {
       const r = el!.getBoundingClientRect();
-      return { x: r.left, y: r.top, cx: r.left + r.width / 2, cy: r.top + r.height / 2, h: r.height };
+      return {
+        x: r.left,
+        y: r.top,
+        cx: r.left + r.width / 2,
+        cy: r.top + r.height / 2,
+        h: r.height,
+      };
     });
     const startX = e.clientX;
     const startY = e.clientY;
