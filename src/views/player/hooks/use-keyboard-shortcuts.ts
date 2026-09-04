@@ -602,6 +602,7 @@ export function useKeyboardShortcuts(params: {
         if (typeof e.payload === "number" && Number.isFinite(e.payload)) {
           const vol = Math.max(0, Math.min(1, e.payload));
           bridgeRef.current?.setVolume(vol);
+          bridgeRef.current?.setMuted(false);
           writePlayerVolume({ volume: vol, muted: false });
           onVolumeFeedback?.(vol, false);
         }

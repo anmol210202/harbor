@@ -743,9 +743,14 @@ export function createMpvBridge(mpvOptions?: MpvOptions): PlayerBridge {
       invoke("mpv_command", { cmd: [dir > 0 ? "frame-step" : "frame-back-step"] }).catch(() => {});
     },
     setVolume(v) {
+      snap.volume = v;
+      if (v > 0) snap.muted = false;
+      emit();
       invoke("mpv_set_property", { name: "volume", value: Math.round(v * 100) }).catch(() => {});
     },
     setMuted(m) {
+      snap.muted = m;
+      emit();
       invoke("mpv_set_property", { name: "mute", value: m }).catch(() => {});
     },
     setRate(r) {
