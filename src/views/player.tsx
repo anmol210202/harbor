@@ -32,6 +32,7 @@ import { useEngineStats } from "./player/hooks/use-engine-stats";
 import { useContentAdvisory } from "./player/hooks/use-content-advisory";
 import {
   getPlaybackPosition,
+  subscribePlaybackClock,
   resolvePlaybackDownloadedFraction,
   setPlaybackDownloaded,
 } from "@/lib/player/playback-clock";
@@ -792,10 +793,30 @@ export function PlayerView({ src }: { src: PlayerSrc }) {
   useEffect(() => {
     const ep = src.episode;
     const subtitle = ep ? `S${ep.season} E${ep.episode}${ep.name ? ` · ${ep.name}` : ""}` : "";
-    // const artUrl = src.meta.poster || src.meta.background || null;
-    const artUrl = src.meta.background || src.meta.poster || null;
-    updateMediaControls(playing, src.meta.name, subtitle, artUrl, snap.durationSec, snap.positionSec);
-  }, [playing, src.meta.name, src.episode, src.meta.poster, src.meta.background, snap.durationSec]);
+    const artUrl = src.episode?.still || src.meta.background || src.meta.poster || null;
+    const vol = snap.muted ? 0 : snap.volume;
+    const isPlaying = snap.status === "playing" && (snap.firstFrameReady || snap.positionSec > 0.3);
+    const pos = getPlaybackPosition();
+    updateMediaControls(isPlaying, src.meta.name, subtitle, artUrl, snap.durationSec, pos, vol);
+
+    const unsub = subscribePlaybackClock(() => {
+      const livePos = getPlaybackPosition();
+      const currentSnap = snapRef.current;
+      const playingNow = currentSnap.status === "playing" && (currentSnap.firstFrameReady || livePos > 0.3);
+      updateMediaControls(playingNow, src.meta.name, subtitle, artUrl, currentSnap.durationSec, livePos, vol);
+    });
+    return () => unsub();
+  }, [
+    snap.status,
+    snap.firstFrameReady,
+    src.meta.name,
+    src.episode,
+    src.meta.poster,
+    src.meta.background,
+    snap.durationSec,
+    snap.volume,
+    snap.muted,
+  ]);
   useEffect(() => () => clearMediaControls(), []);
 
   const onPrevEpisode = useCallback(() => playPrevRef.current(), [playPrevRef]);

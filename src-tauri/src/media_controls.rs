@@ -121,6 +121,7 @@ mod linux {
         pub art_url: Option<String>,
         pub duration_us: i64,
         pub position_us: i64,
+        pub volume: f64,
         pub updated_at: std::time::Instant,
     }
 
@@ -133,6 +134,7 @@ mod linux {
                 art_url: None,
                 duration_us: 0,
                 position_us: 0,
+                volume: 1.0,
                 updated_at: std::time::Instant::now(),
             }
         }
@@ -144,6 +146,10 @@ mod linux {
     }
 
     static MPRIS: OnceLock<Option<MprisHandle>> = OnceLock::new();
+
+    fn get_connection() -> Option<Connection> {
+        MPRIS.get().and_then(|h| h.as_ref()).map(|h| h.connection.clone())
+    }
 
     struct MprisRoot {
         app: AppHandle,
@@ -184,8 +190,44 @@ mod linux {
         }
 
         #[zbus(property)]
-        fn desktop_entry(&self) -> &str {
-            "site.harbor.Harbor"
+        fn desktop_entry(&self) -> String {
+            if let Ok(flatpak_id) = std::env::var("FLATPAK_ID") {
+                if !flatpak_id.trim().is_empty() {
+                    return flatpak_id;
+                }
+            }
+
+            let candidates = [
+                "Harbor Beta.desktop",
+                "app.harbor.desktop",
+                "harbor.desktop",
+                "site.harbor.Harbor.desktop",
+            ];
+
+            let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+                search_dirs.push(std::path::PathBuf::from(data_home).join("applications"));
+            } else if let Some(home) = std::env::var_os("HOME") {
+                search_dirs.push(std::path::PathBuf::from(home).join(".local/share/applications"));
+            }
+
+            let xdg_dirs = std::env::var("XDG_DATA_DIRS")
+                .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string());
+            for d in xdg_dirs.split(':') {
+                if !d.is_empty() {
+                    search_dirs.push(std::path::Path::new(d).join("applications"));
+                }
+            }
+
+            for dir in &search_dirs {
+                for candidate in candidates {
+                    if dir.join(candidate).exists() {
+                        return candidate.trim_end_matches(".desktop").to_string();
+                    }
+                }
+            }
+
+            "app.harbor".to_string()
         }
 
         #[zbus(property)]
@@ -233,24 +275,42 @@ mod linux {
         async fn seek(&self, offset_us: i64) {
             let offset_sec = offset_us as f64 / 1_000_000.0;
             let _ = self.app.emit("harbor://media-seek-relative", offset_sec);
-            let mut s = self.state.lock().await;
-            let current = if s.playing {
-                s.position_us + s.updated_at.elapsed().as_micros() as i64
-            } else {
-                s.position_us
+            let new_pos = {
+                let mut s = self.state.lock().await;
+                let current = if s.playing {
+                    s.position_us + s.updated_at.elapsed().as_micros() as i64
+                } else {
+                    s.position_us
+                };
+                let new_pos = (current + offset_us).max(0);
+                let new_pos = if s.duration_us > 0 { new_pos.min(s.duration_us) } else { new_pos };
+                s.position_us = new_pos;
+                s.updated_at = std::time::Instant::now();
+                new_pos
             };
-            let new_pos = (current + offset_us).max(0);
-            let new_pos = if s.duration_us > 0 { new_pos.min(s.duration_us) } else { new_pos };
-            s.position_us = new_pos;
-            s.updated_at = std::time::Instant::now();
+            if let Some(conn) = get_connection() {
+                if let Ok(iface) = conn.object_server().interface::<_, MprisPlayer>("/org/mpris/MediaPlayer2").await {
+                    let _ = MprisPlayer::seeked(iface.signal_emitter(), new_pos).await;
+                }
+            }
         }
 
         async fn set_position(&self, _track_id: ObjectPath<'_>, position_us: i64) {
             let pos_sec = position_us as f64 / 1_000_000.0;
             let _ = self.app.emit("harbor://media-seek-absolute", pos_sec);
-            let mut s = self.state.lock().await;
-            s.position_us = position_us.max(0);
-            s.updated_at = std::time::Instant::now();
+            let new_pos = {
+                let mut s = self.state.lock().await;
+                let p = position_us.max(0);
+                let p = if s.duration_us > 0 { p.min(s.duration_us) } else { p };
+                s.position_us = p;
+                s.updated_at = std::time::Instant::now();
+                p
+            };
+            if let Some(conn) = get_connection() {
+                if let Ok(iface) = conn.object_server().interface::<_, MprisPlayer>("/org/mpris/MediaPlayer2").await {
+                    let _ = MprisPlayer::seeked(iface.signal_emitter(), new_pos).await;
+                }
+            }
         }
 
         #[zbus(signal)]
@@ -299,12 +359,24 @@ mod linux {
         }
 
         #[zbus(property)]
-        fn volume(&self) -> f64 {
-            1.0
+        async fn volume(&self) -> f64 {
+            self.state.lock().await.volume
         }
 
         #[zbus(property)]
-        fn set_volume(&self, _vol: f64) -> zbus::Result<()> {
+        async fn set_volume(&self, vol: f64) -> zbus::Result<()> {
+            let clamped = vol.clamp(0.0, 1.0);
+            {
+                let mut s = self.state.lock().await;
+                s.volume = clamped;
+            }
+            let _ = self.app.emit("harbor://media-set-volume", clamped);
+            if let Some(conn) = get_connection() {
+                if let Ok(iface) = conn.object_server().interface::<_, MprisPlayer>("/org/mpris/MediaPlayer2").await {
+                    let player = iface.get().await;
+                    let _ = MprisPlayer::volume_changed(&*player, iface.signal_emitter()).await;
+                }
+            }
             Ok(())
         }
 
@@ -469,6 +541,7 @@ mod linux {
         art_url: Option<&str>,
         duration_sec: Option<f64>,
         position_sec: Option<f64>,
+        volume: Option<f64>,
     ) {
         let Some(Some(handle)) = MPRIS.get() else { return };
         let state = handle.state.clone();
@@ -486,21 +559,78 @@ mod linux {
             .unwrap_or(0);
 
         tauri::async_runtime::spawn(async move {
+            let mut vol_changed = false;
+            let mut status_changed = false;
+            let mut meta_changed = false;
+            let mut pos_jumped = false;
+
             {
                 let mut s = state.lock().await;
-                s.playing = playing;
-                s.title = title;
-                s.subtitle = subtitle;
-                s.art_url = art_url;
-                s.duration_us = duration_us;
-                s.position_us = position_us;
-                s.updated_at = std::time::Instant::now();
+                if s.playing != playing {
+                    s.playing = playing;
+                    s.updated_at = std::time::Instant::now();
+                    status_changed = true;
+                }
+                if s.title != title || s.subtitle != subtitle || s.art_url != art_url || s.duration_us != duration_us {
+                    s.title = title;
+                    s.subtitle = subtitle;
+                    s.art_url = art_url;
+                    s.duration_us = duration_us;
+                    meta_changed = true;
+                }
+                let current = if s.playing {
+                    s.position_us + s.updated_at.elapsed().as_micros() as i64
+                } else {
+                    s.position_us
+                };
+                let drift = (current - position_us).abs();
+                if drift > 1_200_000 || status_changed {
+                    s.position_us = position_us;
+                    s.updated_at = std::time::Instant::now();
+                    if drift > 1_200_000 {
+                        pos_jumped = true;
+                    }
+                }
+                if let Some(vol) = volume {
+                    let clamped = vol.clamp(0.0, 1.0);
+                    if (s.volume - clamped).abs() > 0.005 {
+                        s.volume = clamped;
+                        vol_changed = true;
+                    }
+                }
             }
 
             if let Ok(iface) = conn.object_server().interface::<_, MprisPlayer>("/org/mpris/MediaPlayer2").await {
                 let player = iface.get().await;
-                let _ = MprisPlayer::playback_status_changed(&*player, iface.signal_emitter()).await;
-                let _ = MprisPlayer::metadata_changed(&*player, iface.signal_emitter()).await;
+                if status_changed {
+                    let _ = MprisPlayer::playback_status_changed(&*player, iface.signal_emitter()).await;
+                }
+                if meta_changed {
+                    let _ = MprisPlayer::metadata_changed(&*player, iface.signal_emitter()).await;
+                }
+                if vol_changed {
+                    let _ = MprisPlayer::volume_changed(&*player, iface.signal_emitter()).await;
+                }
+                if pos_jumped {
+                    let _ = MprisPlayer::seeked(iface.signal_emitter(), position_us).await;
+                }
+            }
+        });
+    }
+
+    pub fn seeked(position_sec: f64) {
+        let Some(Some(handle)) = MPRIS.get() else { return };
+        let state = handle.state.clone();
+        let conn = handle.connection.clone();
+        let position_us = (position_sec.max(0.0) * 1_000_000.0) as i64;
+        tauri::async_runtime::spawn(async move {
+            {
+                let mut s = state.lock().await;
+                s.position_us = position_us;
+                s.updated_at = std::time::Instant::now();
+            }
+            if let Ok(iface) = conn.object_server().interface::<_, MprisPlayer>("/org/mpris/MediaPlayer2").await {
+                let _ = MprisPlayer::seeked(iface.signal_emitter(), position_us).await;
             }
         });
     }
@@ -548,6 +678,7 @@ pub fn media_controls_update(
     art_url: Option<String>,
     duration_sec: Option<f64>,
     position_sec: Option<f64>,
+    volume: Option<f64>,
 ) {
     #[cfg(windows)]
     win::update(playing, &title, &subtitle);
@@ -559,9 +690,26 @@ pub fn media_controls_update(
         art_url.as_deref(),
         duration_sec,
         position_sec,
+        volume,
     );
     #[cfg(not(any(windows, target_os = "linux")))]
-    let _ = (playing, title, subtitle, art_url, duration_sec, position_sec);
+    let _ = (
+        playing,
+        title,
+        subtitle,
+        art_url,
+        duration_sec,
+        position_sec,
+        volume,
+    );
+}
+
+#[tauri::command]
+pub fn media_controls_seeked(position_sec: f64) {
+    #[cfg(target_os = "linux")]
+    linux::seeked(position_sec);
+    #[cfg(not(target_os = "linux"))]
+    let _ = position_sec;
 }
 
 #[tauri::command]

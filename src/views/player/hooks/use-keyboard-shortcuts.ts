@@ -598,15 +598,25 @@ export function useKeyboardShortcuts(params: {
           mediaRef.current.seekTo(e.payload);
         }
       });
+      const u4 = await listen<number>("harbor://media-set-volume", (e) => {
+        if (typeof e.payload === "number" && Number.isFinite(e.payload)) {
+          const vol = Math.max(0, Math.min(1, e.payload));
+          bridgeRef.current?.setVolume(vol);
+          writePlayerVolume({ volume: vol, muted: false });
+          onVolumeFeedback?.(vol, false);
+        }
+      });
       if (dead) {
         u1();
         u2();
         u3();
+        u4();
       } else {
         cleanup = () => {
           u1();
           u2();
           u3();
+          u4();
         };
       }
     });

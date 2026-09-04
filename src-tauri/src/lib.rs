@@ -948,6 +948,7 @@ pub fn run() {
             discord_rp::discord_set_presence,
             discord_rp::discord_clear,
             media_controls::media_controls_update,
+            media_controls::media_controls_seeked,
             media_controls::media_controls_clear,
             gamepad::gamepad_list,
             gamepad::gamepad_set_enabled,
